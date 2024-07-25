@@ -1,0 +1,87 @@
+version: "3.8"
+
+services:
+  backend:
+    container_name: backend
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: ./backend/.env
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+          - driver: nvidia
+            count: all
+            capabilities: ["gpu"]
+    volumes:
+      - ./backend:/app
+    ports:
+      - 8000:8000
+    entrypoint: ["/app/scripts/start-backend.local.sh"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "200k"
+        max-file: "20"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    container_name: postgresql_db
+    restart: always
+    build:
+      context: ./db
+      dockerfile: Dockerfile
+    volumes:
+      - site_gen_postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=araai
+      - POSTGRES_PASSWORD=araai
+      - POSTGRES_DB=araai
+    healthcheck:
+      test:
+        [
+            "CMD-SHELL", "pg_isready -U araai"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  nginx:
+    container_name: nginx
+    # restart: always
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    volumes:
+     - /etc/letsencrypt/live/api.getara.ai/fullchain.pem:/etc/letsencrypt/live/api.getara.ai/fullchain.pem
+     - /etc/letsencrypt/live/api.getara.ai/privkey.pem:/etc/letsencrypt/live/api.getara.ai/privkey.pem
+     - /etc/letsencrypt/live/langfuse.getara.ai/fullchain.pem:/etc/letsencrypt/live/langfuse.getara.ai/fullchain.pem
+     - /etc/letsencrypt/live/langfuse.getara.ai/privkey.pem:/etc/letsencrypt/live/langfuse.getara.ai/privkey.pem
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+
+  langfuse-server:
+    image: ghcr.io/langfuse/langfuse:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://araai:araai@db:5432/araai
+      - NEXTAUTH_SECRET=mysecret
+      - SALT=mysalt
+      - NEXTAUTH_URL=https://langfuse.getara.ai
+      - TELEMETRY_ENABLED=${TELEMETRY_ENABLED:-true}
+      - LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES=${LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  site_gen_postgres_data: {}
